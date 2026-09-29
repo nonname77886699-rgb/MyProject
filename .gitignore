@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 *.csv
+logs/
+__pycache__/
 
 # Virtual environments
 .venv
+.venv/
