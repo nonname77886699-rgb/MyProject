@@ -10,21 +10,41 @@ import streamlit as st
 
 
 ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
+LOG_PATH = ROOT / "logs" / "etl_pipeline.log"
+DB_PATH = DATA_DIR / "ecommerce.db"
 
 
 @st.cache_data(show_spinner=False)
 def load_retail_data(cleaned: bool = True) -> pd.DataFrame:
-    candidates = [ROOT / "Online_Retail_Clean.csv", ROOT / "Online_Retail.csv"] if cleaned else [ROOT / "Online_Retail.csv"]
+    candidates = (
+        [DATA_DIR / "Online_Retail_Clean.csv", ROOT / "Online_Retail_Clean.csv", DATA_DIR / "Online_Retail.csv", ROOT / "Online_Retail.csv"]
+        if cleaned
+        else [DATA_DIR / "Online_Retail.csv", ROOT / "Online_Retail.csv"]
+    )
     for path in candidates:
         if path.exists():
-            data = pd.read_csv(path, encoding_errors="ignore")
+            data = pd.read_csv(
+                path,
+                encoding_errors="ignore",
+                dtype={
+                    "invoice_no": "category",
+                    "InvoiceNo": "category",
+                    "stock_code": "category",
+                    "StockCode": "category",
+                    "description": "category",
+                    "Description": "category",
+                    "country": "category",
+                    "Country": "category",
+                },
+            )
             return prepare_orders(data)
     return pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False)
 def load_exchange_rates() -> pd.DataFrame:
-    for path in [ROOT / "data" / "exchange_rates.csv", ROOT / "src" / "data" / "exchange_rates.csv"]:
+    for path in [DATA_DIR / "exchange_rates.csv", ROOT / "src" / "data" / "exchange_rates.csv"]:
         if path.exists():
             rates = pd.read_csv(path, parse_dates=["Date"])
             rates["Buy_Rate"] = pd.to_numeric(rates["Buy_Rate"], errors="coerce")
@@ -35,6 +55,25 @@ def load_exchange_rates() -> pd.DataFrame:
 
 def prepare_orders(data: pd.DataFrame) -> pd.DataFrame:
     data = data.copy()
+    column_mapping = {
+        "invoiceno": "InvoiceNo",
+        "invoice": "InvoiceNo",
+        "stockcode": "StockCode",
+        "description": "Description",
+        "quantity": "Quantity",
+        "invoicedate": "InvoiceDate",
+        "unitprice": "UnitPrice",
+        "price": "UnitPrice",
+        "customerid": "CustomerID",
+        "country": "Country",
+        "totalprice": "TotalPrice",
+    }
+    data = data.rename(
+        columns={
+            column: column_mapping.get(column.strip().lower().replace("_", "").replace(" ", ""), column)
+            for column in data.columns
+        }
+    )
     for column in ["Quantity", "UnitPrice", "TotalPrice", "CustomerID"]:
         if column in data:
             data[column] = pd.to_numeric(data[column], errors="coerce")
@@ -42,7 +81,7 @@ def prepare_orders(data: pd.DataFrame) -> pd.DataFrame:
         data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
     if "InvoiceDate" in data:
         data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"], errors="coerce")
-        data["OrderDate"] = data["InvoiceDate"].dt.date
+        data["OrderDate"] = data["InvoiceDate"].dt.normalize()
     return data
 
 
@@ -57,6 +96,39 @@ def convert_to_twd(data: pd.DataFrame, rates: pd.DataFrame, currency: str) -> pd
     result = data.copy()
     result["Revenue_TWD"] = result.get("TotalPrice", pd.Series(dtype=float)).fillna(0) * currency_rate(rates, currency)
     return result
+
+
+def build_rfm(
+    data: pd.DataFrame,
+    value_column: str = "Revenue_TWD",
+    value_multiplier: float = 1.0,
+) -> pd.DataFrame:
+    columns = ["CustomerID", "Recency", "Frequency", "Monetary", "R_Score", "F_Score", "M_Score", "Segment"]
+    required = {"CustomerID", "InvoiceNo", "InvoiceDate", value_column}
+    if data.empty or not required.issubset(data.columns):
+        return pd.DataFrame(columns=columns)
+
+    invoice_dates = pd.to_datetime(data["InvoiceDate"], errors="coerce")
+    reference_date = invoice_dates.max().normalize() + pd.Timedelta(days=1)
+    rfm = data.groupby("CustomerID").agg(
+        Recency=("InvoiceDate", lambda values: (reference_date - values.max().normalize()).days),
+        Frequency=("InvoiceNo", "nunique"),
+        Monetary=(value_column, "sum"),
+    )
+    rfm = rfm.dropna(subset=["Recency"])
+    rfm = rfm.loc[rfm["Monetary"] > 0].reset_index()
+    if rfm.empty:
+        return pd.DataFrame(columns=columns)
+    rfm["Monetary"] *= value_multiplier
+
+    for metric, score in [("Recency", "R_Score"), ("Frequency", "F_Score"), ("Monetary", "M_Score")]:
+        rfm[score] = (rfm[metric].rank(method="average", pct=True) * 5).apply(lambda value: min(5, max(1, int(value + 0.999999))))
+    rfm["R_Score"] = 6 - rfm["R_Score"]
+    rfm["Segment"] = "一般客戶"
+    rfm.loc[(rfm["R_Score"] >= 4) & (rfm["F_Score"] >= 4) & (rfm["M_Score"] >= 4), "Segment"] = "高價值客戶"
+    rfm.loc[(rfm["F_Score"] >= 4) & (rfm["Segment"] == "一般客戶"), "Segment"] = "忠誠客戶"
+    rfm.loc[(rfm["R_Score"] <= 2) & (rfm["F_Score"] >= 3), "Segment"] = "需喚回客戶"
+    return rfm[columns]
 
 
 def latest_rate_summary(rates: pd.DataFrame, currency: str) -> tuple[float | None, float | None]:
@@ -85,7 +157,7 @@ def file_timestamp(path: Path) -> str:
 
 
 def sqlite_status() -> tuple[str, int, str]:
-    path = ROOT / "data" / "ecommerce.db"
+    path = DB_PATH
     if not path.exists():
         return "未找到 SQLite", 0, "尚未建立"
     try:
@@ -97,7 +169,7 @@ def sqlite_status() -> tuple[str, int, str]:
 
 
 def read_log_tail(limit: int = 20) -> list[str]:
-    path = ROOT / "logs" / "etl_pipeline.log"
+    path = LOG_PATH
     if not path.exists():
         return ["尚未找到 logs/etl_pipeline.log"]
     return path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]

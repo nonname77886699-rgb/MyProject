@@ -8,7 +8,7 @@ st.set_page_config(
 	initial_sidebar_state="expanded",
 )
 
-
+	
 PAGES = [
 	st.Page("pages/home.py", title="首頁", icon="🏠", default=True),
 	st.Page("pages/revenue.py", title="營收總覽", icon="💰"),
