@@ -36,3 +36,16 @@ Markdown
 Markdown
 ![地區銷售排名](first.png)
 ![產品銷售散佈圖](test2.png)
+
+---
+
+## 🖥️ Streamlit 分析入口
+
+專案現在提供一個包含 4 個左側導覽連結的 Streamlit 網頁：跨境營收儀表板、ETL 品質監控、數據探索與匯出、系統架構與創作者資訊。
+
+```powershell
+uv sync
+uv run streamlit run app.py
+```
+
+儀表板會讀取 `Online_Retail_Clean.csv`、`data/exchange_rates.csv`、`data/ecommerce.db` 與 `logs/etl_pipeline.log`，並提供 Plotly 趨勢圖、資料品質指標、篩選器及 CSV / Excel 匯出。

@@ -1,65 +1,80 @@
-import pandas as pd
 import os
+import pandas as pd
 
-def clean_online_retail(file_path):
-    print("正在載入原始資料集...")
+def clean_online_retail():
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_DIR = os.path.join(BASE_DIR, "data")
     
-    # 根據檔案格式讀取 (支援 csv 或 xlsx)
-    if file_path.endswith('.csv'):
-        # 部分 Kaggle CSV 編碼可能是 latin1 或 ISO-8859-1
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, encoding='latin1')
-    elif file_path.endswith('.xlsx'):
-        df = pd.read_excel(file_path)
-    else:
-        raise ValueError("不支援的檔案格式，請提供 .csv 或 .xlsx 檔案")
+    input_file = os.path.join(DATA_DIR, "Online_Retail.csv")
+    output_file = os.path.join(DATA_DIR, "Online_Retail_Clean.csv")
+
+    if not os.path.exists(input_file):
+        print(f"❌ 錯誤：找不到輸入檔案 {input_file}，請確認檔案已放置於 data/ 目錄中！")
+        return
+
+    print("🚀 正在載入原始資料集...")
+
+    try:
+        df = pd.read_csv(input_file, encoding='utf-8')
+    except UnicodeDecodeError:
+        df = pd.read_csv(input_file, encoding='ISO-8859-1')
 
     initial_rows = len(df)
-    print(f"原始資料筆數：{initial_rows:,} 筆")
+    print(f"📊 原始資料筆數：{initial_rows:,} 筆")
 
-    # 欄位名稱標準化 (去除前後空白)
-    df.columns = df.columns.str.strip()
+    # -------------------------------------------------------------
+    # 欄位標準化對照表 (消除 StockCode, UnitPrice 等無底線命名差異)
+    # -------------------------------------------------------------
+    column_mapping = {
+        'invoiceno': 'invoice_no',
+        'invoice': 'invoice_no',
+        'stockcode': 'stock_code',
+        'description': 'description',
+        'quantity': 'quantity',
+        'invoicedate': 'invoice_date',
+        'unitprice': 'unit_price',
+        'price': 'unit_price',
+        'customerid': 'customer_id',
+        'country': 'country'
+    }
 
-    # 1. 剔除 Customer ID 為空的無名氏交易 (RFM 分析必要條件)
-    # 相容欄位名稱 Customer ID 或 CustomerID
-    cust_col = 'Customer ID' if 'Customer ID' in df.columns else 'CustomerID'
-    df_clean = df.dropna(subset=[cust_col]).copy()
+    # 先轉小寫並去除底線與空白，再進行統一映射
+    new_cols = {}
+    for col in df.columns:
+        clean_key = col.strip().lower().replace('_', '').replace(' ', '')
+        new_cols[col] = column_mapping.get(clean_key, col.strip().lower())
     
-    # 確保 Customer ID 為整數格式
-    df_clean[cust_col] = df_clean[cust_col].astype(int)
+    df = df.rename(columns=new_cols)
 
-    # 2. 過濾退貨與無效交易
-    # InvoiceNo/Invoice 開頭為 'C' 代表 Cancellation，且 Quantity > 0、UnitPrice/Price > 0
-    inv_col = 'Invoice' if 'Invoice' in df.columns else 'InvoiceNo'
-    price_col = 'Price' if 'Price' in df.columns else 'UnitPrice'
-    
-    df_clean[inv_col] = df_clean[inv_col].astype(str)
-    
+    # 4. 剔除 Customer ID 為空的無名氏交易
+    df_clean = df.dropna(subset=['customer_id']).copy()
+    df_clean['customer_id'] = df_clean['customer_id'].astype(int)
+
+    # 5. 過濾退貨 (C 開頭) 與無效金額/數量
+    df_clean['invoice_no'] = df_clean['invoice_no'].astype(str)
     df_clean = df_clean[
-        (~df_clean[inv_col].str.startswith('C', na=False)) &
-        (df_clean['Quantity'] > 0) &
-        (df_clean[price_col] > 0)
+        (~df_clean['invoice_no'].str.startswith('C', na=False)) &
+        (df_clean['quantity'] > 0) &
+        (df_clean['unit_price'] > 0)
     ]
 
-    # 3. 計算每筆明細交易總金額 TotalPrice
-    df_clean['TotalPrice'] = df_clean['Quantity'] * df_clean[price_col]
+    # 6. 字串與日期格式轉換
+    df_clean['stock_code'] = df_clean['stock_code'].astype(str).str.strip()
+    if 'description' in df_clean.columns:
+        df_clean['description'] = df_clean['description'].astype(str).str.strip()
+        
+    df_clean['invoice_date'] = pd.to_datetime(df_clean['invoice_date'], errors='coerce')
+
+    # 7. 計算交易總金額 TotalPrice (保留 2 位小數)
+    df_clean['total_price'] = (df_clean['quantity'] * df_clean['unit_price']).round(2)
 
     clean_rows = len(df_clean)
     removed_rows = initial_rows - clean_rows
-    print(f"清洗完畢！保留資料筆數：{clean_rows:,} 筆 (已過濾 {removed_rows:,} 筆髒資料/退貨)")
+    print(f"✅ 清洗完畢！保留筆數：{clean_rows:,} 筆 (已過濾 {removed_rows:,} 筆無效/退貨資料)")
 
-    # 4. 匯出乾淨的 CSV 檔給 Power BI / SQL 使用
-    output_filename = "Online_Retail_Clean.csv"
-    df_clean.to_csv(output_filename, index=False, encoding='utf-8-sig')
-    print(f"已成功匯出清洗後的檔案：{output_filename}")
+    # 8. 匯出乾淨資料至 data/Online_Retail_Clean.csv
+    df_clean.to_csv(output_file, index=False, encoding='utf-8-sig')
+    print(f"🎉 已成功匯出檔案至：{output_file}")
 
 if __name__ == "__main__":
-    # 請確保檔名與你下載的 CSV 檔名一致
-    input_file = "Online_Retail.csv" 
-    
-    if os.path.exists(input_file):
-        clean_online_retail(input_file)
-    else:
-        print(f"錯誤：找不到 {input_file}，請確認檔案已放進目前的專案目錄中！")
+    clean_online_retail()

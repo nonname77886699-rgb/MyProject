@@ -1,13 +1,22 @@
+!data/exchange_rates.csv
 # Python-generated files
 __pycache__/
 *.py[oc]
 build/
-dist/
-wheels/
-*.egg-info
 *.csv
+config.ini
+dist/
+.env
+*.env
+*.egg-info
+wheels/
+
+
 logs/
 __pycache__/
+secrets.json
+
+
 
 # Virtual environments
 .venv
