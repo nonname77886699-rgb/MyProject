@@ -48,6 +48,6 @@ uv sync
 uv run streamlit run app.py
 ```
 
-Streamlit Community Cloud 預設使用 Python 3.12；專案支援 Python 3.12 以上版本，並以 `uv.lock` 安裝相依套件。
+Streamlit Community Cloud 預設使用 Python 3.12；本專案以 Python 3.12 執行，並透過 `uv.lock` 安裝相依套件。
 
 交易資料優先讀取 `data/Online_Retail_Clean.csv`，也支援專案根目錄及 `data/Online_Retail.csv`。儀表板提供營收趨勢、客戶回購、商品銷售及國家市場圖表；其他既有 ETL 監控與資料匯出頁則讀取匯率、SQLite 與 pipeline log。
