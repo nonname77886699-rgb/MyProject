@@ -1,10 +1,8 @@
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
 from dashboard_utils import (
-    build_rfm,
     convert_to_twd,
     currency_rate,
     first_column,
@@ -64,21 +62,3 @@ else:
         st.subheader("主要買家國家")
         countries = orders_twd.groupby("Country", dropna=True)["Revenue_TWD"].sum().nlargest(10).sort_values()
         st.bar_chart(countries, horizontal=True)
-
-    rfm = build_rfm(orders, value_column="TotalPrice", value_multiplier=currency_rate(rates, currency))
-    if not rfm.empty:
-        st.subheader("RFM 顧客分群")
-        st.caption("Recency 以資料集最後交易日為基準；Frequency 為不同訂單數，Monetary 為折算後消費額。")
-        rfm_chart = px.scatter(
-            rfm,
-            x="Recency",
-            y="Monetary",
-            size="Frequency",
-            color="Segment",
-            hover_name="CustomerID",
-            labels={"Recency": "距最近交易天數", "Monetary": "累計消費額（TWD）", "Frequency": "訂單數", "Segment": "客群"},
-        )
-        rfm_chart.update_layout(height=440, margin={"t": 20, "r": 20, "b": 20, "l": 20})
-        st.plotly_chart(rfm_chart, use_container_width=True)
-        segments = rfm["Segment"].value_counts().rename_axis("客群").to_frame("顧客數")
-        st.dataframe(segments, use_container_width=True)

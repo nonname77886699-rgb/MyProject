@@ -10,41 +10,30 @@ import streamlit as st
 
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-LOG_PATH = ROOT / "logs" / "etl_pipeline.log"
-DB_PATH = DATA_DIR / "ecommerce.db"
 
 
 @st.cache_data(show_spinner=False)
 def load_retail_data(cleaned: bool = True) -> pd.DataFrame:
     candidates = (
-        [DATA_DIR / "Online_Retail_Clean.csv", ROOT / "Online_Retail_Clean.csv", DATA_DIR / "Online_Retail.csv", ROOT / "Online_Retail.csv"]
+        [
+            ROOT / "data" / "Online_Retail_Clean.csv",
+            ROOT / "Online_Retail_Clean.csv",
+            ROOT / "data" / "Online_Retail.csv",
+            ROOT / "Online_Retail.csv",
+        ]
         if cleaned
-        else [DATA_DIR / "Online_Retail.csv", ROOT / "Online_Retail.csv"]
+        else [ROOT / "data" / "Online_Retail.csv", ROOT / "Online_Retail.csv"]
     )
     for path in candidates:
         if path.exists():
-            data = pd.read_csv(
-                path,
-                encoding_errors="ignore",
-                dtype={
-                    "invoice_no": "category",
-                    "InvoiceNo": "category",
-                    "stock_code": "category",
-                    "StockCode": "category",
-                    "description": "category",
-                    "Description": "category",
-                    "country": "category",
-                    "Country": "category",
-                },
-            )
+            data = pd.read_csv(path, encoding_errors="ignore")
             return prepare_orders(data)
     return pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False)
 def load_exchange_rates() -> pd.DataFrame:
-    for path in [DATA_DIR / "exchange_rates.csv", ROOT / "src" / "data" / "exchange_rates.csv"]:
+    for path in [ROOT / "data" / "exchange_rates.csv", ROOT / "src" / "data" / "exchange_rates.csv"]:
         if path.exists():
             rates = pd.read_csv(path, parse_dates=["Date"])
             rates["Buy_Rate"] = pd.to_numeric(rates["Buy_Rate"], errors="coerce")
@@ -58,6 +47,7 @@ def prepare_orders(data: pd.DataFrame) -> pd.DataFrame:
     column_mapping = {
         "invoiceno": "InvoiceNo",
         "invoice": "InvoiceNo",
+        "invoicenumber": "InvoiceNo",
         "stockcode": "StockCode",
         "description": "Description",
         "quantity": "Quantity",
@@ -81,7 +71,7 @@ def prepare_orders(data: pd.DataFrame) -> pd.DataFrame:
         data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
     if "InvoiceDate" in data:
         data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"], errors="coerce")
-        data["OrderDate"] = data["InvoiceDate"].dt.normalize()
+        data["OrderDate"] = data["InvoiceDate"].dt.date
     return data
 
 
@@ -96,39 +86,6 @@ def convert_to_twd(data: pd.DataFrame, rates: pd.DataFrame, currency: str) -> pd
     result = data.copy()
     result["Revenue_TWD"] = result.get("TotalPrice", pd.Series(dtype=float)).fillna(0) * currency_rate(rates, currency)
     return result
-
-
-def build_rfm(
-    data: pd.DataFrame,
-    value_column: str = "Revenue_TWD",
-    value_multiplier: float = 1.0,
-) -> pd.DataFrame:
-    columns = ["CustomerID", "Recency", "Frequency", "Monetary", "R_Score", "F_Score", "M_Score", "Segment"]
-    required = {"CustomerID", "InvoiceNo", "InvoiceDate", value_column}
-    if data.empty or not required.issubset(data.columns):
-        return pd.DataFrame(columns=columns)
-
-    invoice_dates = pd.to_datetime(data["InvoiceDate"], errors="coerce")
-    reference_date = invoice_dates.max().normalize() + pd.Timedelta(days=1)
-    rfm = data.groupby("CustomerID").agg(
-        Recency=("InvoiceDate", lambda values: (reference_date - values.max().normalize()).days),
-        Frequency=("InvoiceNo", "nunique"),
-        Monetary=(value_column, "sum"),
-    )
-    rfm = rfm.dropna(subset=["Recency"])
-    rfm = rfm.loc[rfm["Monetary"] > 0].reset_index()
-    if rfm.empty:
-        return pd.DataFrame(columns=columns)
-    rfm["Monetary"] *= value_multiplier
-
-    for metric, score in [("Recency", "R_Score"), ("Frequency", "F_Score"), ("Monetary", "M_Score")]:
-        rfm[score] = (rfm[metric].rank(method="average", pct=True) * 5).apply(lambda value: min(5, max(1, int(value + 0.999999))))
-    rfm["R_Score"] = 6 - rfm["R_Score"]
-    rfm["Segment"] = "一般客戶"
-    rfm.loc[(rfm["R_Score"] >= 4) & (rfm["F_Score"] >= 4) & (rfm["M_Score"] >= 4), "Segment"] = "高價值客戶"
-    rfm.loc[(rfm["F_Score"] >= 4) & (rfm["Segment"] == "一般客戶"), "Segment"] = "忠誠客戶"
-    rfm.loc[(rfm["R_Score"] <= 2) & (rfm["F_Score"] >= 3), "Segment"] = "需喚回客戶"
-    return rfm[columns]
 
 
 def latest_rate_summary(rates: pd.DataFrame, currency: str) -> tuple[float | None, float | None]:
@@ -157,7 +114,7 @@ def file_timestamp(path: Path) -> str:
 
 
 def sqlite_status() -> tuple[str, int, str]:
-    path = DB_PATH
+    path = ROOT / "data" / "ecommerce.db"
     if not path.exists():
         return "未找到 SQLite", 0, "尚未建立"
     try:
@@ -169,7 +126,7 @@ def sqlite_status() -> tuple[str, int, str]:
 
 
 def read_log_tail(limit: int = 20) -> list[str]:
-    path = LOG_PATH
+    path = ROOT / "logs" / "etl_pipeline.log"
     if not path.exists():
         return ["尚未找到 logs/etl_pipeline.log"]
     return path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
@@ -195,11 +152,47 @@ def render_header(eyebrow: str, title: str, description: str) -> None:
     st.caption(description)
 
 
+def render_date_filter(data: pd.DataFrame, key: str) -> pd.DataFrame:
+    if data.empty or "OrderDate" not in data:
+        return data
+
+    dates = pd.to_datetime(data["OrderDate"], errors="coerce").dropna()
+    if dates.empty:
+        return data
+
+    start_date = dates.min().date()
+    end_date = dates.max().date()
+    selected_range = st.date_input(
+        "日期區間",
+        value=(start_date, end_date),
+        min_value=start_date,
+        max_value=end_date,
+        key=key,
+    )
+    if not isinstance(selected_range, tuple) or len(selected_range) != 2:
+        return data
+
+    order_dates = pd.to_datetime(data["OrderDate"], errors="coerce").dt.date
+    return data.loc[order_dates.between(selected_range[0], selected_range[1])].copy()
+
+
+def style_chart(figure: Any, height: int = 420) -> Any:
+    figure.update_layout(
+        template="plotly_white",
+        height=height,
+        paper_bgcolor="#F6F1E8",
+        plot_bgcolor="#FFFAF2",
+        font={"color": "#172026"},
+        margin={"t": 30, "r": 20, "b": 20, "l": 20},
+    )
+    return figure
+
+
 def render_styles() -> None:
     st.markdown(
         """
         <style>
-        :root { --ink: #172026; --muted: #64727a; --accent: #e56b4e; --cream: #f6f1e8; }
+        :root { --ink: #172026; --muted: #64727a; --accent: #a8432c; --cream: #f6f1e8; }
         .stApp { background: var(--cream); }
         [data-testid="stSidebar"] { background: #172026; }
         [data-testid="stSidebar"] * { color: #f6f1e8; }

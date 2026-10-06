@@ -20,6 +20,8 @@ render_header(
     "用資料筆數、檔案時間戳與 pipeline log 快速判斷自動化任務健康度。",
 )
 
+raw_path = ROOT / "Online_Retail.csv"
+clean_path = ROOT / "Online_Retail_Clean.csv"
 raw = load_retail_data(cleaned=False)
 clean = load_retail_data(cleaned=True)
 sqlite_label, sqlite_rows, sqlite_time = sqlite_status()

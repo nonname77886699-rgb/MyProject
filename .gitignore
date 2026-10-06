@@ -21,3 +21,8 @@ secrets.json
 # Virtual environments
 .venv
 .venv/
+"**/.venv",
+"**/venv",
+"**/data",
+"**/*.csv"
+*.DB
